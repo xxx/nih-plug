@@ -647,7 +647,7 @@ impl<P: Vst3Plugin> MainThreadExecutor<Task<P>> for WrapperInner<P> {
             Task::RequestResize => match &*self.plug_view.read() {
                 Some(plug_view) => unsafe {
                     nih_debug_assert!(is_gui_thread);
-                    let success = plug_view.request_resize();
+                    let success = WrapperView::request_resize(plug_view);
                     nih_debug_assert!(success, "Failed requesting a window resize");
                 },
                 None => nih_debug_assert_failure!("Can't resize a closed editor"),

@@ -14,7 +14,7 @@ use vst3::Steinberg::{
     IPlugViewContentScaleSupportTrait, IPlugViewContentScaleSupport_::ScaleFactor, IPlugViewTrait,
     ViewRect,
 };
-use vst3::{Class, ComPtr, ComRef};
+use vst3::{Class, ComPtr, ComRef, ComWrapper};
 
 use super::inner::{Task, WrapperInner};
 use crate::plugin::vst3::Vst3Plugin;
@@ -125,9 +125,9 @@ impl<P: Vst3Plugin> WrapperView<P> {
     ///
     /// May cause memory corruption in Linux REAPER when called from outside of the `IRunLoop`.
     #[must_use]
-    pub unsafe fn request_resize(&self) -> bool {
+    pub unsafe fn request_resize(this: &ComWrapper<Self>) -> bool {
         // Don't do anything if the editor is not open, because that would be strange
-        if self
+        if this
             .editor_handle
             .try_read()
             .map(|e| e.is_none())
@@ -136,10 +136,10 @@ impl<P: Vst3Plugin> WrapperView<P> {
             return false;
         }
 
-        match &*self.plug_frame.read() {
+        match &*this.plug_frame.read() {
             Some(plug_frame) => {
-                let (unscaled_width, unscaled_height) = self.editor.lock().size();
-                let scaling_factor = self.scaling_factor.load(Ordering::Relaxed);
+                let (unscaled_width, unscaled_height) = this.editor.lock().size();
+                let scaling_factor = this.scaling_factor.load(Ordering::Relaxed);
                 let mut size = ViewRect {
                     left: 0,
                     top: 0,
@@ -147,20 +147,15 @@ impl<P: Vst3Plugin> WrapperView<P> {
                     bottom: (unscaled_height as f32 * scaling_factor).round() as i32,
                 };
 
-                // // The argument types are a bit wonky here because you can't construct a
-                // // `SharedVstPtr`. This _should_ work however.
-                // let plug_view: SharedVstPtr<dyn IPlugView> =
-                //     mem::transmute(&self.__iplugviewvptr as *const *const _);
-                // let result = plug_frame.resize_view(plug_view, &mut size);
+                let plug_view = this.as_com_ref::<IPlugView>().unwrap();
+                let result = plug_frame.resizeView(plug_view.as_ptr(), &mut size);
 
-                // debug_assert_eq!(
-                //     result, kResultOk,
-                //     "The host denied the resize, we currently don't handle this for VST3 plugins"
-                // );
+                debug_assert_eq!(
+                    result, kResultOk,
+                    "The host denied the resize, we currently don't handle this for VST3 plugins"
+                );
 
-                // result == kResultOk
-
-                true
+                result == kResultOk
             }
             None => false,
         }

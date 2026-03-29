@@ -83,6 +83,9 @@ pub trait GuiContext: Send + Sync + 'static {
 pub struct AsyncExecutor<P: Plugin> {
     pub(crate) execute_background: Arc<dyn Fn(P::BackgroundTask) + Send + Sync>,
     pub(crate) execute_gui: Arc<dyn Fn(P::BackgroundTask) + Send + Sync>,
+    /// A handle to the GUI context, allowing plugins to update host-visible parameters
+    /// (e.g. via [`ParamSetter`]) without the GUI being open.
+    pub gui_context: Arc<dyn GuiContext>,
 }
 
 // Can't derive this since Rust then requires `P` to also be `Clone`able
@@ -91,6 +94,7 @@ impl<P: Plugin> Clone for AsyncExecutor<P> {
         Self {
             execute_background: self.execute_background.clone(),
             execute_gui: self.execute_gui.clone(),
+            gui_context: self.gui_context.clone(),
         }
     }
 }

@@ -717,6 +717,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                         nih_debug_assert!(task_posted, "The task queue is full, dropping task...");
                     }
                 }),
+                gui_context: wrapper.clone().make_gui_context(),
             })
             .map(Mutex::new);
 

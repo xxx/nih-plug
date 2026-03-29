@@ -279,6 +279,7 @@ impl<P: Plugin, B: Backend<P>> Wrapper<P, B> {
                         nih_debug_assert!(task_posted, "The task queue is full, dropping task...");
                     }
                 }),
+                gui_context: wrapper.clone().make_gui_context(),
             })
             .map(|editor| Arc::new(Mutex::new(editor)));
 

@@ -127,6 +127,12 @@ pub trait Plugin: Default + Send + 'static {
     /// to do offline processing.
     const HARD_REALTIME_ONLY: bool = false;
 
+    /// If true, the wrapper skips copying input buffers to output buffers before calling
+    /// `process()`. This is useful for pass-through plugins (e.g. analyzers, oscilloscopes) that
+    /// read but never modify the audio buffer. The plugin must not modify the main audio buffer
+    /// when this is set to true.
+    const BYPASS_BUFFER_COPY: bool = false;
+
     /// The plugin's SysEx message type if it supports sending or receiving MIDI SysEx messages, or
     /// `()` if it does not. This type can be a struct or enum wrapping around one or more message
     /// types, and the [`SysExMessage`] trait is then used to convert between this type and basic

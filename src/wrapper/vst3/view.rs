@@ -385,8 +385,7 @@ impl<P: Vst3Plugin> IPlugViewTrait for WrapperView<P> {
         let width = (*new_size).right - (*new_size).left;
         let height = (*new_size).bottom - (*new_size).top;
         if width > 0 && height > 0 {
-            // Accept the new size. The host resizes the parent window,
-            // and baseview fires a Resized event that the editor handles.
+            self.editor.lock().set_size(width as u32, height as u32);
             kResultOk
         } else {
             kResultFalse

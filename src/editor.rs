@@ -69,11 +69,14 @@ pub trait Editor: Send {
     /// loaded.
     fn param_values_changed(&self);
 
-    // TODO: Reconsider adding a tick function here for the Linux `IRunLoop`. To keep this platform
-    //       and API agnostic, add a way to ask the GuiContext if the wrapper already provides a
-    //       tick function. If it does not, then the Editor implementation must handle this by
-    //       itself. This would also need an associated `PREFERRED_FRAME_RATE` constant.
-    // TODO: Host->Plugin resizing
+    /// Called when the host requests a new size for the editor window (e.g. the
+    /// user drags the window edge). The `width` and `height` are in physical
+    /// pixels. The editor should resize its window on the next frame.
+    ///
+    /// The default implementation does nothing and returns `false`.
+    fn set_size(&self, _width: u32, _height: u32) -> bool {
+        false
+    }
 }
 
 /// A raw window handle for platform and GUI framework agnostic editors. This implements

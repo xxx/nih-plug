@@ -2750,10 +2750,15 @@ impl<P: ClapPlugin> Wrapper<P> {
         width: u32,
         height: u32,
     ) -> bool {
-        // Accept the new size. The host will resize the parent window,
-        // and baseview will fire a Resized event that the editor handles.
         check_null_ptr!(false, plugin, (*plugin).plugin_data);
-        width > 0 && height > 0
+        if width == 0 || height == 0 {
+            return false;
+        }
+        let wrapper = &*((*plugin).plugin_data as *const Self);
+        if let Some(editor) = wrapper.editor.borrow().as_ref() {
+            editor.lock().set_size(width, height);
+        }
+        true
     }
 
     unsafe extern "C" fn ext_gui_set_parent(

@@ -47,6 +47,10 @@ use clap_sys::ext::render::{
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::ext::tail::{clap_plugin_tail, CLAP_EXT_TAIL};
 use clap_sys::ext::thread_check::{clap_host_thread_check, CLAP_EXT_THREAD_CHECK};
+use clap_sys::ext::track_info::{
+    clap_host_track_info, clap_plugin_track_info, clap_track_info, CLAP_EXT_TRACK_INFO,
+    CLAP_EXT_TRACK_INFO_COMPAT, CLAP_TRACK_INFO_HAS_TRACK_COLOR, CLAP_TRACK_INFO_HAS_TRACK_NAME,
+};
 use clap_sys::ext::voice_info::{
     clap_host_voice_info, clap_plugin_voice_info, clap_voice_info, CLAP_EXT_VOICE_INFO,
     CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES,
@@ -85,7 +89,7 @@ use crate::midi::MidiResult;
 use crate::prelude::{
     AsyncExecutor, AudioIOLayout, AuxiliaryBuffers, BufferConfig, ClapPlugin, Editor, MidiConfig,
     NoteEvent, ParamFlags, ParamPtr, Params, ParentWindowHandle, Plugin, PluginNoteEvent,
-    ProcessMode, ProcessStatus, SysExMessage, TaskExecutor, Transport,
+    ProcessMode, ProcessStatus, SysExMessage, TaskExecutor, TrackInfo, Transport,
 };
 use crate::util::permit_alloc;
 use crate::wrapper::clap::context::RemoteControlPages;
@@ -234,6 +238,9 @@ pub struct Wrapper<P: ClapPlugin> {
     clap_plugin_state: clap_plugin_state,
 
     clap_plugin_tail: clap_plugin_tail,
+
+    clap_plugin_track_info: clap_plugin_track_info,
+    host_track_info: AtomicRefCell<Option<ClapPtr<clap_host_track_info>>>,
 
     clap_plugin_voice_info: clap_plugin_voice_info,
     host_voice_info: AtomicRefCell<Option<ClapPtr<clap_host_voice_info>>>,
@@ -664,6 +671,11 @@ impl<P: ClapPlugin> Wrapper<P> {
             clap_plugin_tail: clap_plugin_tail {
                 get: Some(Self::ext_tail_get),
             },
+
+            clap_plugin_track_info: clap_plugin_track_info {
+                changed: Some(Self::ext_track_info_changed),
+            },
+            host_track_info: AtomicRefCell::new(None),
 
             clap_plugin_voice_info: clap_plugin_voice_info {
                 get: Some(Self::ext_voice_info_get),
@@ -1856,6 +1868,16 @@ impl<P: ClapPlugin> Wrapper<P> {
             &wrapper.host_callback,
             CLAP_EXT_THREAD_CHECK,
         );
+        // Try the stable extension name first, then fall back to the draft/compat name
+        let host_track_info =
+            query_host_extension::<clap_host_track_info>(&wrapper.host_callback, CLAP_EXT_TRACK_INFO)
+                .or_else(|| {
+                    query_host_extension::<clap_host_track_info>(
+                        &wrapper.host_callback,
+                        CLAP_EXT_TRACK_INFO_COMPAT,
+                    )
+                });
+        *wrapper.host_track_info.borrow_mut() = host_track_info;
 
         true
     }
@@ -2336,6 +2358,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             &wrapper.clap_plugin_state as *const _ as *const c_void
         } else if id == CLAP_EXT_TAIL {
             &wrapper.clap_plugin_tail as *const _ as *const c_void
+        } else if id == CLAP_EXT_TRACK_INFO || id == CLAP_EXT_TRACK_INFO_COMPAT {
+            &wrapper.clap_plugin_track_info as *const _ as *const c_void
         } else if id == CLAP_EXT_VOICE_INFO && P::CLAP_POLY_MODULATION_CONFIG.is_some() {
             &wrapper.clap_plugin_voice_info as *const _ as *const c_void
         } else {
@@ -3190,6 +3214,46 @@ impl<P: ClapPlugin> Wrapper<P> {
             ProcessStatus::Tail(samples) => samples,
             ProcessStatus::KeepAlive => u32::MAX,
             _ => 0,
+        }
+    }
+
+    unsafe extern "C" fn ext_track_info_changed(plugin: *const clap_plugin) {
+        check_null_ptr!((), plugin, (*plugin).plugin_data);
+        let wrapper = &*((*plugin).plugin_data as *const Self);
+
+        // Query the host for the current track info
+        let host_track_info = wrapper.host_track_info.borrow();
+        let host_track_info = match &*host_track_info {
+            Some(ext) => ext,
+            None => return,
+        };
+
+        let mut info: clap_track_info = std::mem::zeroed();
+        let success =
+            clap_call! { host_track_info=>get(&*wrapper.host_callback, &mut info) };
+        if !success {
+            return;
+        }
+
+        let name = if info.flags & CLAP_TRACK_INFO_HAS_TRACK_NAME != 0 {
+            // Convert the C string name to a Rust String
+            let c_str = CStr::from_ptr(info.name.as_ptr());
+            c_str.to_str().ok().map(|s| s.to_string())
+        } else {
+            None
+        };
+
+        let color = if info.flags & CLAP_TRACK_INFO_HAS_TRACK_COLOR != 0 {
+            Some((info.color.red, info.color.green, info.color.blue, info.color.alpha))
+        } else {
+            None
+        };
+
+        let track_info = TrackInfo { name, color };
+
+        // Call the plugin's update_track_info method on the main thread
+        if let Some(mut plugin) = wrapper.plugin.try_lock() {
+            plugin.update_track_info(track_info);
         }
     }
 

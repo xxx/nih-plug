@@ -8,6 +8,16 @@ use crate::prelude::{
     MidiConfig, Params, PluginState, ProcessContext, SysExMessage,
 };
 
+/// Information about the track/channel the plugin is inserted on, as provided by the host.
+/// Not all hosts support this. Fields are `None` when the host does not provide them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrackInfo {
+    /// The name of the track/channel (e.g. "Kick", "Bass", "Vocals").
+    pub name: Option<String>,
+    /// The track/channel color as (red, green, blue) in 0-255 range.
+    pub color: Option<(u8, u8, u8, u8)>,
+}
+
 pub mod clap;
 #[cfg(feature = "vst3")]
 pub mod vst3;
@@ -252,6 +262,13 @@ pub trait Plugin: Default + Send + 'static {
     /// `initialize()` may be called more than once before `deactivate()` is called, for instance
     /// when restoring state while the plugin is still activate.
     fn deactivate(&mut self) {}
+
+    /// Called when the host provides or updates track/channel information (name, color, etc.).
+    /// Not all hosts support this -- CLAP hosts may use the `clap.track-info` extension, and
+    /// VST3 hosts may use the `IInfoListener` interface. The default implementation does nothing.
+    ///
+    /// This is called on the main thread, not the audio thread.
+    fn update_track_info(&mut self, info: TrackInfo) {}
 }
 
 /// Indicates the current situation after the plugin has processed audio.

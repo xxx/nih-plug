@@ -1244,7 +1244,7 @@ impl<P: Vst3Plugin> IAudioProcessorTrait for Wrapper<P> {
                     // any axuiliary inputs.
                     let mut buffer_manager = self.inner.buffer_manager.borrow_mut();
                     let buffers =
-                        buffer_manager.create_buffers(block_start, block_len, |buffer_source| {
+                        buffer_manager.create_buffers_with_options(block_start, block_len, P::BYPASS_BUFFER_COPY, |buffer_source| {
                             if data.numOutputs > 0
                                 && !data.outputs.is_null()
                                 && !(*data.outputs).__field0.channelBuffers32.is_null()

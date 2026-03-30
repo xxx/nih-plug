@@ -2066,7 +2066,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 //       flags?
                 let mut buffer_manager = wrapper.buffer_manager.borrow_mut();
                 let buffers =
-                    buffer_manager.create_buffers(block_start, block_len, |buffer_source| {
+                    buffer_manager.create_buffers_with_options(block_start, block_len, P::BYPASS_BUFFER_COPY, |buffer_source| {
                         // Explicitly take plugins with no main output that does have auxiliary
                         // outputs into account. Shouldn't happen, but if we just start copying
                         // audio here then that would result in unsoundness.

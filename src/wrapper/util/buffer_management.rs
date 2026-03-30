@@ -170,6 +170,30 @@ impl BufferManager {
         num_samples: usize,
         set_buffer_sources: impl FnOnce(&mut BufferSource),
     ) -> Buffers<'a, 'buffer> {
+        self.create_buffers_inner(sample_offset, num_samples, false, set_buffer_sources)
+    }
+
+    /// Like [`create_buffers`][Self::create_buffers], but when `bypass_buffer_copy` is `true` the
+    /// input-to-output copy for the main buffer is skipped. The main output buffer will still
+    /// point to the host's output pointers, but no data will be copied from the input. This is
+    /// intended for pass-through plugins that only read the audio without modifying it.
+    pub unsafe fn create_buffers_with_options<'a, 'buffer: 'a>(
+        &'a mut self,
+        sample_offset: usize,
+        num_samples: usize,
+        bypass_buffer_copy: bool,
+        set_buffer_sources: impl FnOnce(&mut BufferSource),
+    ) -> Buffers<'a, 'buffer> {
+        self.create_buffers_inner(sample_offset, num_samples, bypass_buffer_copy, set_buffer_sources)
+    }
+
+    unsafe fn create_buffers_inner<'a, 'buffer: 'a>(
+        &'a mut self,
+        sample_offset: usize,
+        num_samples: usize,
+        bypass_buffer_copy: bool,
+        set_buffer_sources: impl FnOnce(&mut BufferSource),
+    ) -> Buffers<'a, 'buffer> {
         // Make sure the caller can't forget to unset previously set values
         self.main_input_channel_pointers = None;
         self.main_output_channel_pointers = None;
@@ -215,42 +239,45 @@ impl BufferManager {
         });
 
         // Since NIH-plug processes audio in-place, main input data needs to be copied to the main
-        // output buffers
-        if let (Some(input_channel_pointers), Some(output_channel_pointers)) = (
-            self.main_input_channel_pointers,
-            self.main_output_channel_pointers,
-        ) {
-            self.main_buffer.set_slices(num_samples, |output_slices| {
-                for (channel_idx, output_slice) in output_slices
-                    .iter_mut()
-                    .enumerate()
-                    .take(input_channel_pointers.num_channels)
-                {
-                    let input_channel_pointer =
-                        *input_channel_pointers.ptrs.as_ptr().add(channel_idx);
-                    debug_assert!(channel_idx < output_channel_pointers.num_channels);
-                    let output_channel_pointer =
-                        *output_channel_pointers.ptrs.as_ptr().add(channel_idx);
-
-                    // If the host processes the main IO out of place then the inputs need to be
-                    // copied to the output buffers. Otherwise the input should already be there.
-                    if input_channel_pointer != output_channel_pointer {
-                        output_slice.copy_from_slice(std::slice::from_raw_parts_mut(
-                            input_channel_pointer.add(sample_offset),
-                            num_samples,
-                        ))
-                    }
-                }
-            });
-
-            // Any excess channels will need to be filled with zeroes since they'd otherwise point
-            // to whatever was left in the buffer
-            if input_channel_pointers.num_channels < output_channel_pointers.num_channels {
+        // output buffers. When `bypass_buffer_copy` is set, this copy is skipped because the
+        // plugin is a pass-through that only reads the audio without modifying it.
+        if !bypass_buffer_copy {
+            if let (Some(input_channel_pointers), Some(output_channel_pointers)) = (
+                self.main_input_channel_pointers,
+                self.main_output_channel_pointers,
+            ) {
                 self.main_buffer.set_slices(num_samples, |output_slices| {
-                    for slice in &mut output_slices[input_channel_pointers.num_channels..] {
-                        slice.fill(0.0);
+                    for (channel_idx, output_slice) in output_slices
+                        .iter_mut()
+                        .enumerate()
+                        .take(input_channel_pointers.num_channels)
+                    {
+                        let input_channel_pointer =
+                            *input_channel_pointers.ptrs.as_ptr().add(channel_idx);
+                        debug_assert!(channel_idx < output_channel_pointers.num_channels);
+                        let output_channel_pointer =
+                            *output_channel_pointers.ptrs.as_ptr().add(channel_idx);
+
+                        // If the host processes the main IO out of place then the inputs need to be
+                        // copied to the output buffers. Otherwise the input should already be there.
+                        if input_channel_pointer != output_channel_pointer {
+                            output_slice.copy_from_slice(std::slice::from_raw_parts_mut(
+                                input_channel_pointer.add(sample_offset),
+                                num_samples,
+                            ))
+                        }
                     }
                 });
+
+                // Any excess channels will need to be filled with zeroes since they'd otherwise point
+                // to whatever was left in the buffer
+                if input_channel_pointers.num_channels < output_channel_pointers.num_channels {
+                    self.main_buffer.set_slices(num_samples, |output_slices| {
+                        for slice in &mut output_slices[input_channel_pointers.num_channels..] {
+                            slice.fill(0.0);
+                        }
+                    });
+                }
             }
         }
 

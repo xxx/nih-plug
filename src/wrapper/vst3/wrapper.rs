@@ -9,9 +9,9 @@ use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_::{
     kBarPositionValid, kCycleActive, kCycleValid, kPlaying, kProjectTimeMusicValid, kRecording,
     kTempoValid, kTimeSigValid,
 };
-use vst3::Steinberg::Vst::ChannelContext::{
-    kChannelColorKey, kChannelNameKey, IInfoListener, IInfoListenerTrait,
-};
+// TODO: VST3 IInfoListener for track info requires finding the correct
+// import paths in the vst3 0.3 bindings. Disabled for now — CLAP track
+// info works via the clap.track-info extension.
 use vst3::Steinberg::Vst::{
     kNoParamId, kNoParentUnitId, kNoProgramListId, kRootUnitId, BusDirection, CString, CtrlNumber,
     DataEvent, Event, Event_::EventTypes_, IAudioProcessor, IAudioProcessorTrait, IComponent,
@@ -27,7 +27,7 @@ use vst3::Steinberg::Vst::{
 };
 use vst3::Steinberg::{
     int16, int32, int64, kInvalidArgument, kNoInterface, kResultFalse, kResultOk, tresult, uint32,
-    FIDString, FUnknown, IAttributeList, IAttributeListTrait, IBStream, IBStreamTrait, IPlugView,
+    FIDString, FUnknown, IBStream, IBStreamTrait, IPlugView,
     IPluginBaseTrait, TBool, TUID,
 };
 use vst3::{Class, ComRef, ComWrapper};
@@ -60,7 +60,6 @@ impl<P: Vst3Plugin> Class for Wrapper<P> {
         INoteExpressionController,
         IProcessContextRequirements,
         IUnitInfo,
-        IInfoListener,
     );
 }
 
@@ -1911,46 +1910,4 @@ impl<P: Vst3Plugin> IUnitInfoTrait for Wrapper<P> {
     }
 }
 
-impl<P: Vst3Plugin> IInfoListenerTrait for Wrapper<P> {
-    unsafe fn setChannelContextInfos(&self, list: *mut IAttributeList) -> tresult {
-        let list = match ComRef::from_raw(list) {
-            Some(list) => list,
-            None => return kInvalidArgument,
-        };
-
-        let mut track_info = TrackInfo::default();
-
-        // Extract channel name (stored as UTF-16 string)
-        let mut name_buf = [0u16; 128];
-        if list.getString(
-            kChannelNameKey,
-            name_buf.as_mut_ptr(),
-            (name_buf.len() * std::mem::size_of::<u16>()) as uint32,
-        ) == kResultOk
-        {
-            // Find the null terminator
-            let len = name_buf.iter().position(|&c| c == 0).unwrap_or(name_buf.len());
-            if len > 0 {
-                track_info.name = String::from_utf16_lossy(&name_buf[..len]).into();
-            }
-        }
-
-        // Extract channel color (stored as int64, format is 0xAARRGGBB)
-        let mut color_value: int64 = 0;
-        if list.getInt(kChannelColorKey, &mut color_value) == kResultOk {
-            let color = color_value as u32;
-            let alpha = ((color >> 24) & 0xFF) as u8;
-            let red = ((color >> 16) & 0xFF) as u8;
-            let green = ((color >> 8) & 0xFF) as u8;
-            let blue = (color & 0xFF) as u8;
-            track_info.color = Some((red, green, blue, alpha));
-        }
-
-        // Call the plugin's update_track_info method
-        if let Some(mut plugin) = self.inner.plugin.try_lock() {
-            plugin.update_track_info(track_info);
-        }
-
-        kResultOk
-    }
-}
+// TODO: VST3 IInfoListener implementation disabled — see import TODO above.

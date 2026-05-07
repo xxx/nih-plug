@@ -121,6 +121,11 @@ struct WrapperWindowHandler {
     /// This is used to communicate with the wrapper from the audio thread and from within the
     /// baseview window handler on the GUI thread.
     gui_task_receiver: channel::Receiver<GuiTask>,
+
+    /// Handle to the plugin's editor. We forward outer-window `Resized` events to
+    /// `Editor::set_size` so the editor can resize its own child window in response
+    /// to the user dragging the standalone window's frame.
+    editor: Arc<Mutex<Box<dyn Editor>>>,
 }
 
 /// A message sent to the GUI thread.
@@ -146,7 +151,12 @@ impl WindowHandler for WrapperWindowHandler {
         }
     }
 
-    fn on_event(&mut self, _window: &mut Window, _event: baseview::Event) -> EventStatus {
+    fn on_event(&mut self, _window: &mut Window, event: baseview::Event) -> EventStatus {
+        if let baseview::Event::Window(baseview::WindowEvent::Resized(info)) = event {
+            let new_w = info.physical_size().width;
+            let new_h = info.physical_size().height;
+            self.editor.lock().set_size(new_w, new_h);
+        }
         EventStatus::Ignored
     }
 }
@@ -366,11 +376,13 @@ impl<P: Plugin, B: Backend<P>> Wrapper<P, B> {
                         //       baseview does not support this yet. Once this is added, we should
                         //       immediately close the parent window when this happens so the loop
                         //       can exit.
+                        let editor_for_handler = editor.clone();
                         let editor_handle = editor.lock().spawn(parent_handle, context);
 
                         WrapperWindowHandler {
                             _editor_handle: editor_handle,
                             gui_task_receiver,
+                            editor: editor_for_handler,
                         }
                     },
                 )

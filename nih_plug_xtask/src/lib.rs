@@ -630,16 +630,13 @@ fn target_base(target_directory: &Path, cross_compile_target: Option<&str>) -> R
     }
 }
 
-/// The file name of the compiled library for a binary crate.
+/// The filename of the package's compiled executable.
 fn binary_basename(package: &str, target: CompilationTarget) -> String {
-    // Cargo will replace dashes with underscores
-    let bin_name = package.replace('-', "_");
-
     match target {
         CompilationTarget::Linux(_)
         | CompilationTarget::MacOS(_)
-        | CompilationTarget::MacOSUniversal => bin_name,
-        CompilationTarget::Windows(_) => format!("{bin_name}.exe"),
+        | CompilationTarget::MacOSUniversal => package.to_owned(),
+        CompilationTarget::Windows(_) => format!("{package}.exe"),
     }
 }
 
@@ -820,5 +817,82 @@ pub fn maybe_codesign(bundle_home: &Path, target: CompilationTarget) {
             "WARNING: Could not self-sign '{}', it may fail to run depending on the environment",
             bundle_home.display()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_names_preserve_hyphens_on_unix() {
+        for target in [
+            CompilationTarget::Linux(Architecture::X86_64),
+            CompilationTarget::MacOS(Architecture::X86_64),
+            CompilationTarget::MacOS(Architecture::AArch64),
+            CompilationTarget::MacOSUniversal,
+        ] {
+            assert_eq!(binary_basename("gs-meter", target), "gs-meter");
+        }
+    }
+
+    #[test]
+    fn binary_names_preserve_hyphens_on_windows() {
+        assert_eq!(
+            binary_basename("gs-meter", CompilationTarget::Windows(Architecture::X86_64)),
+            "gs-meter.exe"
+        );
+    }
+
+    #[test]
+    fn binary_names_preserve_underscores() {
+        assert_eq!(
+            binary_basename("gs_meter", CompilationTarget::Linux(Architecture::X86_64)),
+            "gs_meter"
+        );
+    }
+
+    #[test]
+    fn library_names_still_replace_hyphens_with_underscores() {
+        for (target, expected) in [
+            (
+                CompilationTarget::Linux(Architecture::X86_64),
+                "libgs_meter.so",
+            ),
+            (
+                CompilationTarget::MacOS(Architecture::AArch64),
+                "libgs_meter.dylib",
+            ),
+            (
+                CompilationTarget::Windows(Architecture::X86_64),
+                "gs_meter.dll",
+            ),
+        ] {
+            assert_eq!(library_basename("gs-meter", target), expected);
+        }
+    }
+
+    #[test]
+    fn bundle_copies_hyphenated_standalone() {
+        let temp = tempfile::tempdir().unwrap();
+        let build_dir = temp.path().join("x86_64-unknown-linux-gnu/release");
+        fs::create_dir_all(&build_dir).unwrap();
+        fs::write(build_dir.join("gs-meter"), b"standalone executable").unwrap();
+
+        bundle(
+            temp.path(),
+            "gs-meter",
+            &[
+                "--release".into(),
+                "--target=x86_64-unknown-linux-gnu".into(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(temp.path().join("bundled/gs-meter")).unwrap(),
+            b"standalone executable"
+        );
     }
 }

@@ -1367,35 +1367,13 @@ impl<P: Vst3Plugin> IAudioProcessorTrait for Wrapper<P> {
                             transport.time_sig_denominator = Some(context.timeSigDenominator);
                         }
 
-                        // We need to compensate for the block splitting here
-                        transport.pos_samples =
-                            Some(context.projectTimeSamples + block_start as i64);
+                        transport.pos_samples = Some(context.projectTimeSamples);
                         if context.state & kProjectTimeMusicValid as u32 != 0 {
-                            if P::SAMPLE_ACCURATE_AUTOMATION
-                                && block_start > 0
-                                && (context.state & kTempoValid as u32 != 0)
-                            {
-                                transport.pos_beats = Some(
-                                    context.projectTimeMusic
-                                        + (block_start as f64 / sample_rate as f64 / 60.0
-                                            * context.tempo),
-                                );
-                            } else {
-                                transport.pos_beats = Some(context.projectTimeMusic);
-                            }
+                            transport.pos_beats = Some(context.projectTimeMusic);
                         }
 
                         if context.state & kBarPositionValid as u32 != 0 {
-                            if P::SAMPLE_ACCURATE_AUTOMATION && block_start > 0 {
-                                // The transport object knows how to recompute this from the other information
-                                transport.bar_start_pos_beats =
-                                    match transport.bar_start_pos_beats() {
-                                        Some(updated) => Some(updated),
-                                        None => Some(context.barPositionMusic),
-                                    };
-                            } else {
-                                transport.bar_start_pos_beats = Some(context.barPositionMusic);
-                            }
+                            transport.bar_start_pos_beats = Some(context.barPositionMusic);
                         }
                         if context.state & kCycleActive as u32 != 0
                             && context.state & kCycleValid as u32 != 0
@@ -1404,6 +1382,7 @@ impl<P: Vst3Plugin> IAudioProcessorTrait for Wrapper<P> {
                                 Some((context.cycleStartMusic, context.cycleEndMusic));
                         }
                     }
+                    transport.offset_samples(block_start);
 
                     let result = if buffer_is_valid {
                         // NOTE: `parking_lot`'s mutexes sometimes allocate because of their use of

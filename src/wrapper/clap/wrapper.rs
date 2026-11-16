@@ -2191,52 +2191,17 @@ impl<P: ClapPlugin> Wrapper<P> {
                     }
                     if context.flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE != 0 {
                         let beats = context.song_pos_beats as f64 / CLAP_BEATTIME_FACTOR as f64;
-
-                        // This is a bit messy, but we'll try to compensate for the block splitting.
-                        // We can't use the functions on the transport information object for this
-                        // because we don't have any sample information.
-                        if P::SAMPLE_ACCURATE_AUTOMATION
-                            && block_start > 0
-                            && (context.flags & CLAP_TRANSPORT_HAS_TEMPO != 0)
-                        {
-                            transport.pos_beats = Some(
-                                beats
-                                    + (block_start as f64 / sample_rate as f64 / 60.0
-                                        * context.tempo),
-                            );
-                        } else {
-                            transport.pos_beats = Some(beats);
-                        }
+                        transport.pos_beats = Some(beats);
                     }
                     if context.flags & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE != 0 {
                         let seconds = context.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64;
 
-                        // Same here
-                        if P::SAMPLE_ACCURATE_AUTOMATION
-                            && block_start > 0
-                            && (context.flags & CLAP_TRANSPORT_HAS_TEMPO != 0)
-                        {
-                            transport.pos_seconds =
-                                Some(seconds + (block_start as f64 / sample_rate as f64));
-                        } else {
-                            transport.pos_seconds = Some(seconds);
-                        }
+                        transport.pos_seconds = Some(seconds);
                     }
                     // TODO: CLAP does not mention whether this is behind a flag or not
-                    if P::SAMPLE_ACCURATE_AUTOMATION && block_start > 0 {
-                        transport.bar_start_pos_beats = match transport.bar_start_pos_beats() {
-                            Some(updated) => Some(updated),
-                            None => Some(context.bar_start as f64 / CLAP_BEATTIME_FACTOR as f64),
-                        };
-                        transport.bar_number = match transport.bar_number() {
-                            Some(updated) => Some(updated),
-                            None => Some(context.bar_number),
-                        };
-                    } else {
-                        transport.bar_start_pos_beats =
-                            Some(context.bar_start as f64 / CLAP_BEATTIME_FACTOR as f64);
-                        transport.bar_number = Some(context.bar_number);
-                    }
+                    transport.bar_start_pos_beats =
+                        Some(context.bar_start as f64 / CLAP_BEATTIME_FACTOR as f64);
+                    transport.bar_number = Some(context.bar_number);
                     // TODO: They also aren't very clear about this, but presumably if the loop is
                     //       active and the corresponding song transport information is available then
                     //       this is also available
@@ -2256,6 +2221,12 @@ impl<P: ClapPlugin> Wrapper<P> {
                             context.loop_end_seconds as f64 / CLAP_SECTIME_FACTOR as f64,
                         ));
                     }
+                    let origin = if transport_info == process.transport {
+                        0
+                    } else {
+                        context.header.time as usize
+                    };
+                    transport.offset_samples(block_start.saturating_sub(origin));
                 }
 
                 let result = if buffer_is_valid {

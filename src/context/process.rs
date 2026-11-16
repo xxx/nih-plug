@@ -153,6 +153,64 @@ pub struct Transport {
 }
 
 impl Transport {
+    /// Project host coordinates to a wrapper-created sub-block without moving a stopped transport.
+    pub(crate) fn offset_samples(&mut self, offset: usize) {
+        if offset == 0 || !self.playing || !self.sample_rate.is_finite() || self.sample_rate <= 0.0
+        {
+            return;
+        }
+        let sample_loop = self.loop_range_samples();
+        let second_loop = self.loop_range_seconds();
+        let beat_loop = self.loop_range_beats();
+        let old_beats = self.pos_beats().filter(|value| value.is_finite());
+        let old_bar = self.bar_start_pos_beats().filter(|value| value.is_finite());
+        let seconds = offset as f64 / self.sample_rate as f64;
+
+        if let Some(position) = self.pos_samples {
+            let mut next = position as i128 + offset as i128;
+            if let Some((start, end)) = sample_loop {
+                if end > start && position <= end && next >= end as i128 {
+                    next = start as i128
+                        + (next - end as i128).rem_euclid(end as i128 - start as i128);
+                }
+            }
+            self.pos_samples = Some(next.clamp(i64::MIN as i128, i64::MAX as i128) as i64);
+        }
+        if let Some(position) = self.pos_seconds {
+            self.pos_seconds = Some(offset_position(position, seconds, second_loop));
+        }
+        if let (Some(position), Some(tempo)) = (self.pos_beats, self.tempo) {
+            if tempo.is_finite() && tempo > 0.0 {
+                self.pos_beats = Some(offset_position(position, seconds / 60.0 * tempo, beat_loop));
+            }
+        }
+
+        // Keep the host's bar origin/number, including meter changes before this block.
+        if let (Some(previous), Some(next), Some(start), Some(numerator), Some(denominator)) = (
+            old_beats,
+            self.pos_beats().filter(|value| value.is_finite()),
+            old_bar,
+            self.time_sig_numerator,
+            self.time_sig_denominator,
+        ) {
+            if previous != next && numerator > 0 && denominator > 0 {
+                let length = numerator as f64 / denominator as f64 * 4.0;
+                let bars = ((next - start) / length).floor();
+                let bar_start = start + bars * length;
+                if bars.is_finite() && bar_start.is_finite() {
+                    if self.bar_start_pos_beats.is_some() {
+                        self.bar_start_pos_beats = Some(bar_start);
+                    }
+                    if let Some(number) = self.bar_number {
+                        self.bar_number = Some(
+                            (number as f64 + bars).clamp(i32::MIN as f64, i32::MAX as f64) as i32,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Initialize the transport struct without any information.
     pub(crate) fn new(sample_rate: f32) -> Self {
         Self {
@@ -335,5 +393,147 @@ impl Transport {
             )),
             (_, _, _, _) => None,
         }
+    }
+}
+
+fn offset_position(position: f64, delta: f64, range: Option<(f64, f64)>) -> f64 {
+    if delta <= 0.0 {
+        return position;
+    }
+    let value = position + delta;
+    if !value.is_finite() {
+        return position;
+    }
+    if let Some((start, end)) = range {
+        if start.is_finite()
+            && end.is_finite()
+            && end > start
+            && (end - start).is_finite()
+            && position <= end
+            && value >= end
+        {
+            let wrapped = start + (value - end).rem_euclid(end - start);
+            return if wrapped.is_finite() {
+                wrapped
+            } else {
+                position
+            };
+        }
+    }
+    value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transport(playing: bool) -> Transport {
+        let mut value = Transport::new(48000.0);
+        value.playing = playing;
+        value.tempo = Some(120.0);
+        value.pos_samples = Some(12000);
+        value.pos_seconds = Some(0.25);
+        value.pos_beats = Some(0.5);
+        value.time_sig_numerator = Some(4);
+        value.time_sig_denominator = Some(4);
+        value.bar_start_pos_beats = Some(0.0);
+        value.bar_number = Some(12);
+        value
+    }
+    #[test]
+    fn stopped_and_sample_zero_offsets_preserve_all_host_coordinates_and_bars() {
+        for (playing, offset) in [(false, 0), (false, 5), (false, 13), (true, 0)] {
+            let mut value = transport(playing);
+            value.offset_samples(offset);
+            assert_eq!(value.pos_samples, Some(12000));
+            assert_eq!(value.pos_seconds, Some(0.25));
+            assert_eq!(value.pos_beats, Some(0.5));
+            assert_eq!(value.bar_start_pos_beats, Some(0.0));
+            assert_eq!(value.bar_number, Some(12));
+        }
+    }
+    #[test]
+    fn playing_offsets_advance_all_available_domains_and_preserve_the_host_bar_origin() {
+        for offset in [5, 13, 24000] {
+            let mut value = transport(true);
+            value.offset_samples(offset);
+            assert_eq!(value.pos_samples, Some(12000 + offset as i64));
+            assert!((value.pos_seconds.unwrap() - 0.25 - offset as f64 / 48000.0).abs() < 1e-12);
+            assert!((value.pos_beats.unwrap() - 0.5 - offset as f64 / 24000.0).abs() < 1e-12);
+        }
+        let mut value = transport(true);
+        value.pos_beats = Some(4.24);
+        value.bar_start_pos_beats = Some(0.25);
+        value.offset_samples(480);
+        assert_eq!(value.bar_start_pos_beats, Some(4.25));
+        assert_eq!(value.bar_number, Some(13));
+    }
+    #[test]
+    fn seconds_only_transports_advance_without_tempo_and_beats_do_not_invent_a_rate() {
+        let mut value = Transport::new(48000.0);
+        value.playing = true;
+        value.pos_seconds = Some(0.25);
+        value.offset_samples(24000);
+        assert_eq!(value.pos_seconds, Some(0.75));
+        assert_eq!(value.pos_samples, None);
+        assert_eq!(value.pos_beats, None);
+        for tempo in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            let mut value = transport(true);
+            value.tempo = tempo;
+            value.offset_samples(480);
+            assert_eq!(value.pos_beats, Some(0.5));
+            assert_eq!(value.pos_samples, Some(12480));
+            assert_eq!(value.pos_seconds, Some(0.26));
+            assert_eq!(value.bar_start_pos_beats, Some(0.0));
+        }
+    }
+    #[test]
+    fn active_loops_wrap_projected_offsets_but_keep_the_supplied_origin_authoritative() {
+        for (seconds, beats, samples, offset, expected_seconds, expected_beats, expected_samples) in [
+            (1.375, 2.75, 11, 0, 1.375, 2.75, 11),
+            (1.375, 2.75, 11, 2, 1.125, 2.25, 9),
+            (0.375, 0.75, 3, 2, 0.625, 1.25, 5),
+            (2.0, 4.0, 16, 2, 2.25, 4.5, 18),
+            (1.5, 3.0, 12, 0, 1.5, 3.0, 12),
+            (1.5, 3.0, 12, 1, 1.125, 2.25, 9),
+        ] {
+            let mut value = transport(true);
+            value.sample_rate = 8.0;
+            value.pos_samples = Some(samples);
+            value.pos_seconds = Some(seconds);
+            value.pos_beats = Some(beats);
+            value.loop_range_samples = Some((8, 12));
+            value.loop_range_seconds = Some((1.0, 1.5));
+            value.loop_range_beats = Some((2.0, 3.0));
+            value.offset_samples(offset);
+            assert_eq!(value.pos_samples, Some(expected_samples));
+            assert_eq!(value.pos_seconds, Some(expected_seconds));
+            assert_eq!(value.pos_beats, Some(expected_beats));
+        }
+    }
+    #[test]
+    fn invalid_ranges_and_extreme_sample_positions_do_not_overflow_or_create_nonfinite_values() {
+        for rate in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let mut value = transport(true);
+            value.sample_rate = rate;
+            value.offset_samples(480);
+            assert_eq!(value.pos_samples, Some(12000));
+            assert_eq!(value.pos_seconds, Some(0.25));
+        }
+        let mut value = transport(true);
+        value.pos_samples = Some(i64::MAX - 1);
+        value.loop_range_samples = Some((10, 0));
+        value.loop_range_seconds = Some((1.0, 0.0));
+        value.loop_range_beats = Some((0.0, f64::INFINITY));
+        value.offset_samples(13);
+        assert_eq!(value.pos_samples, Some(i64::MAX));
+        assert!(value.pos_seconds.unwrap().is_finite());
+        assert!(value.pos_beats.unwrap().is_finite());
     }
 }
